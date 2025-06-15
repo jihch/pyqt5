@@ -1,0 +1,5 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource>
+    <file alias="icon.ico">icon.ico</file>  <!-- 使用 ICO 格式 -->
+</qresource>
+</RCC>
