@@ -1,15 +1,18 @@
 from PyQt5.QtWidgets import QPlainTextEdit, QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QHBoxLayout, \
     QPushButton, QFileDialog, QMessageBox
-from PyQt5.QtCore import Qt, QRect
+from PyQt5.QtCore import Qt, QRect, QTimer
 from PyQt5.QtGui import QFontMetrics, QTextCursor, QIcon
 import sys
 import base64
+from datetime import datetime
+import time
 import resources  # 导入编译后的资源模块
 
 
 class SmartTextEdit(QPlainTextEdit):
     def __init__(self, parent=None, margin=20):
         super().__init__(parent)
+        self.available_width = None
         self.margin = margin  # 边距，像素
 
         # 设置为等宽字体，更适合BASE64字符串
@@ -33,74 +36,87 @@ class SmartTextEdit(QPlainTextEdit):
         # 获取剪贴板文本
         text = source.text()
 
+
+        print("insertFromMimeData 时间:")
+        dt = datetime.fromtimestamp(time.time())
+        print(dt)
+
         if text:
             # 获取当前文本域的可用宽度
-            available_width = self.viewport().width() - self.margin
+            self.available_width = self.viewport().width() - self.margin
 
+            '''
             # 应用智能换行
             wrapped_text = self.wrap_text(text, available_width)
 
             # 插入处理后的文本
             cursor = self.textCursor()
             cursor.insertText(wrapped_text)
+            '''
+            # 使用定时器异步处理文本，避免UI卡顿
+            QTimer.singleShot(0, lambda: self._process_and_insert_text(text))
         else:
             # 如果不是文本，使用默认行为
             super().insertFromMimeData(source)
 
-    def wrap_text(self, text, width_pixels):
-        """智能换行文本，基于像素宽度"""
-        if not text:
-            return ""
+    def _process_and_insert_text(self, text):
+        """异步处理文本并插入"""
+        # 显示处理中的提示
+        self.setPlainText("正在处理文本...")
 
-        # 获取字体指标，用于计算字符宽度
+        # 使用定时器将耗时操作拆分成小任务
+        QTimer.singleShot(0, lambda: self._insert_wrapped_text(text))
+
+    def _insert_wrapped_text(self, text):
+        """执行文本换行处理并插入"""
+        standard_alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='
+
+        char_width_dict = {}
+
         font_metrics = QFontMetrics(self.font())
 
-        # 按行处理
-        lines = text.split('\n')
-        wrapped_lines = []
+        for c in standard_alphabet:
+            char_width_dict[c] = font_metrics.width(c)
 
-        for line in lines:
-            tmp = self.wrap_line(line, width_pixels, font_metrics)
-            wrapped_lines.append(tmp)
 
-        return '\n'.join(wrapped_lines)
+        print("_insert_wrapped_text 开始时间:")
+        dt = datetime.fromtimestamp(time.time())
+        print(dt)
 
-    def wrap_line(self, line, width_pixels, font_metrics):
-        """处理单行文本的换行，基于像素宽度"""
-        if not line:
-            return ""
+        # 应用智能换行
+        wrapped_text = ""
 
-        # 计算整行文本的宽度
-        line_width = font_metrics.width(line)
+        lines = []
+        current_line = []
+        current_width = 0
 
-        # 如果整行宽度小于可用宽度，直接返回
-        if line_width <= width_pixels:
-            return line
-
-        wrapped_lines = []
-        current_line = ""
-        remaining_text = line
-
-        while remaining_text:
-            # 尝试添加一个字符，检查是否超过宽度
-            if font_metrics.width(current_line + remaining_text[0]) <= width_pixels:
-                current_line += remaining_text[0]
-                remaining_text = remaining_text[1:]
-            else:
-                # 如果当前行不为空，添加到结果中
-                if current_line:
-                    wrapped_lines.append(current_line)
-                    current_line = ""
+        if text:
+            for char in text:
+                char_width = char_width_dict[char]
+                if current_width + char_width <= self.available_width:
+                    current_line.append(char)
+                    current_width += char_width
                 else:
-                    # 如果当前行为空但字符宽度超过限制，强制添加一个字符
-                    wrapped_lines.append(remaining_text[0])
-                    remaining_text = remaining_text[1:]
+                    lines.append(''.join(current_line))
+                    current_line = [char]
+                    current_width = char_width
+            if current_line:
+                lines.append(''.join(current_line))
+            wrapped_text = '\n'.join(lines)
 
-        # 添加最后一行
-        if current_line:
-            wrapped_lines.append(current_line)
+        # wrapped_text = self.wrap_text(text, available_width)
+        print("while 循环结束时间:")
+        dt = datetime.fromtimestamp(time.time())
+        print(dt)
 
-        return '\n'.join(wrapped_lines)
+        # 恢复光标位置并插入处理后的文本
+        cursor = self.textCursor()
+        self.setPlainText(wrapped_text)
+        print("setPlainText 结束时间:")
+        dt = datetime.fromtimestamp(time.time())
+        print(dt)
+        cursor.setPosition(0)
+        self.setTextCursor(cursor)
 
 
 # 使用示例
@@ -143,7 +159,6 @@ if __name__ == "__main__":
     def save_base64_file():
         """处理保存BASE64文件的逻辑"""
         # 获取BASE64文本
-        global output_path
         base64_text = text_edit.toPlainText().strip()
         if not base64_text:
             QMessageBox.warning(window, "警告", "请先粘贴BASE64字符串!")
@@ -152,11 +167,29 @@ if __name__ == "__main__":
         # 获取输出路径
         output_folder = ""
 
+        # print("before replace \\n:")
+        # print(base64_text)
+
+        base64_text = base64_text.replace('\n', '')
+
+        # print("after replace \\n:")
+        # print(base64_text)
+
+        output_path = None
+        decoded_bytes = None
         try:
             # 解码BASE64数据
-            decoded_data = base64.b64decode(base64_text)
+            # 字符串 → bytes
+            encoded_bytes = base64_text.encode('ascii')
+            # print("encoded_bytes:")
+            # print(encoded_bytes)
 
-            file_type_str = detect_file_type(decoded_data)
+            # bytes → bytes
+            decoded_bytes = base64.b64decode(encoded_bytes)
+            # print("decoded_bytes:")
+            # print(decoded_bytes)
+
+            file_type_str = detect_file_type(decoded_bytes)
 
             if file_type_str != 'PNG' and file_type_str != 'PDF':
                 QMessageBox.critical(window, "错误", f"不是PNG 也不是 PDF")
@@ -177,11 +210,9 @@ if __name__ == "__main__":
 
         try:
             # 解码BASE64数据
-            decoded_data = base64.b64decode(base64_text)
-
             # 保存到文件
             with open(output_path, 'wb') as f:
-                f.write(decoded_data)
+                f.write(decoded_bytes)
 
             QMessageBox.information(window, "成功", f"文件已成功保存到:\n{output_path}")
         except Exception as e:
